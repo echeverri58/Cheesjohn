@@ -1,0 +1,6 @@
+{
+  "name": "Ajedrez P2P",
+  "description": "Juego de ajedrez minimalista para dos celulares en tiempo real mediante PeerJS y código QR.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

@@ -1,0 +1,2476 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <title>Ajedrez P2P — Dos Celulares</title>
+    <meta
+      name="description"
+      content="Juego de ajedrez minimalista para dos celulares en tiempo real mediante PeerJS y código QR."
+    />
+    <meta property="og:title" content="Ajedrez P2P — Dos Celulares" />
+    <meta
+      property="og:description"
+      content="Escanea el código QR y juega ajedrez directamente entre dos celulares sin base de datos."
+    />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="theme-color" content="#F6F6F4" />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- PeerJS desde CDN con respaldo automático -->
+    <script
+      src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"
+      onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js';"
+    ></script>
+    <!-- Generador de códigos QR SVG desde CDN con respaldo -->
+    <script
+      src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"
+      onerror="this.onerror=null;this.src='https://unpkg.com/qrcode-generator@1.4.4/qrcode.js';"
+    ></script>
+
+    <style>
+      :root {
+        --bg-canvas: #f6f6f4;
+        --bg-surface: #ffffff;
+        --bg-subtle: #ecece8;
+        --border-hairline: #e2e2dc;
+        --text-primary: #18181b;
+        --text-secondary: #52525b;
+        --text-muted: #71717a;
+
+        --sq-light: #efede6;
+        --sq-dark: #6b7f75;
+        --sq-selected: rgba(21, 128, 61, 0.34);
+        --sq-last-from: rgba(234, 179, 8, 0.28);
+        --sq-last-to: rgba(234, 179, 8, 0.42);
+        --sq-check: radial-gradient(circle, rgba(220, 38, 38, 0.72) 0%, rgba(220, 38, 38, 0) 72%);
+
+        --status-waiting: #b45309;
+        --status-waiting-bg: #fef3c7;
+        --status-connected: #15803d;
+        --status-connected-bg: #dcfce7;
+        --status-error: #dc2626;
+        --status-error-bg: #fee2e2;
+
+        --accent: #18181b;
+        --accent-emerald: #15803d;
+        --radius-card: 16px;
+        --radius-board: 12px;
+        --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+      }
+
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        min-height: 100%;
+        min-height: 100dvh;
+        background-color: var(--bg-canvas);
+        color: var(--text-primary);
+        font-family: var(--font-sans);
+        -webkit-font-smoothing: antialiased;
+        overscroll-behavior-y: contain;
+      }
+
+      button {
+        font-family: inherit;
+        cursor: pointer;
+        border: none;
+        background: none;
+        color: inherit;
+        padding: 0;
+      }
+
+      button:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+
+      /* Shell principal */
+      .app-shell {
+        min-height: 100dvh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* Barra superior: compacta, <= 56px */
+      .topbar {
+        height: 54px;
+        padding: 0 16px;
+        border-bottom: 1px solid var(--border-hairline);
+        background-color: var(--bg-surface);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        position: sticky;
+        top: 0;
+        z-index: 30;
+      }
+
+      .brand {
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+
+      /* Indicador visual en tiempo real */
+      .live-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        font-weight: 600;
+        padding: 6px 10px;
+        border-radius: 8px;
+        white-space: nowrap;
+        flex-shrink: 0;
+        transition: background-color 180ms ease, color 180ms ease;
+      }
+
+      .live-status.waiting {
+        color: var(--status-waiting);
+        background-color: var(--status-waiting-bg);
+      }
+
+      .live-status.connected {
+        color: var(--status-connected);
+        background-color: var(--status-connected-bg);
+      }
+
+      .live-status.disconnected {
+        color: var(--status-error);
+        background-color: var(--status-error-bg);
+      }
+
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+
+      .live-status.waiting .status-dot {
+        background-color: var(--status-waiting);
+        animation: pulse-dot 1.6s ease-in-out infinite;
+      }
+
+      .live-status.connected .status-dot {
+        background-color: var(--status-connected);
+      }
+
+      .live-status.disconnected .status-dot {
+        background-color: var(--status-error);
+      }
+
+      @keyframes pulse-dot {
+        0%,
+        100% {
+          opacity: 1;
+          transform: scale(1);
+        }
+        50% {
+          opacity: 0.4;
+          transform: scale(0.8);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .live-status.waiting .status-dot {
+          animation: none;
+        }
+      }
+
+      /* Contenido principal */
+      .main-content {
+        flex: 1;
+        width: 100%;
+        max-width: 1040px;
+        margin: 0 auto;
+        padding: 16px;
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 20px;
+        align-items: start;
+      }
+
+      @media (min-width: 900px) {
+        .main-content {
+          padding: 28px 24px;
+          grid-template-columns: minmax(0, 520px) minmax(280px, 1fr);
+          gap: 32px;
+          align-items: center;
+          justify-content: center;
+        }
+      }
+
+      /* Columna del tablero */
+      .board-column {
+        width: 100%;
+        max-width: 520px;
+        margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      /* Franjas de jugador (arriba y abajo del tablero) */
+      .player-strip {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 8px 12px;
+        background-color: var(--bg-surface);
+        border: 1px solid var(--border-hairline);
+        border-radius: 10px;
+        min-height: 46px;
+        transition: border-color 180ms ease, box-shadow 180ms ease;
+      }
+
+      .player-strip.active-turn {
+        border-color: var(--accent-emerald);
+        box-shadow: 0 0 0 1px var(--accent-emerald);
+      }
+
+      .player-identity {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+      }
+
+      .color-swatch {
+        width: 18px;
+        height: 18px;
+        border-radius: 4px;
+        flex-shrink: 0;
+        border: 1px solid #d4d4d8;
+      }
+
+      .color-swatch.white {
+        background-color: #fafaf9;
+      }
+
+      .color-swatch.black {
+        background-color: #18181b;
+        border-color: #18181b;
+      }
+
+      .player-name {
+        font-size: 14px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+
+      .player-meta {
+        font-size: 12px;
+        color: var(--text-muted);
+        white-space: nowrap;
+      }
+
+      .turn-tag {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--accent-emerald);
+        white-space: nowrap;
+      }
+
+      .captured-row {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        min-height: 20px;
+        overflow: hidden;
+      }
+
+      .captured-pieces {
+        display: inline-flex;
+        align-items: center;
+        letter-spacing: -2px;
+        font-size: 15px;
+        line-height: 1;
+        color: var(--text-secondary);
+      }
+
+      .material-adv {
+        font-family: var(--font-mono);
+        font-variant-numeric: tabular-nums;
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--text-muted);
+        margin-left: 4px;
+      }
+
+      /* Tablero de ajedrez */
+      .board-wrapper {
+        position: relative;
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        border-radius: var(--radius-board);
+        overflow: hidden;
+        border: 1px solid var(--border-hairline);
+        box-shadow: 0 6px 20px rgba(24, 24, 27, 0.06);
+        user-select: none;
+        touch-action: manipulation;
+        background-color: var(--sq-light);
+      }
+
+      .board-grid {
+        display: grid;
+        grid-template-columns: repeat(8, 1fr);
+        grid-template-rows: repeat(8, 1fr);
+        width: 100%;
+        height: 100%;
+      }
+
+      .square {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        height: 100%;
+        padding: 0;
+        transition: background-color 120ms ease;
+      }
+
+      .square.light {
+        background-color: var(--sq-light);
+        color: #4b5c53;
+      }
+
+      .square.dark {
+        background-color: var(--sq-dark);
+        color: #efede6;
+      }
+
+      .square.last-from::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background: var(--sq-last-from);
+        pointer-events: none;
+      }
+
+      .square.last-to::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background: var(--sq-last-to);
+        pointer-events: none;
+      }
+
+      .square.selected::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background: var(--sq-selected);
+        pointer-events: none;
+      }
+
+      .square.in-check::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background: var(--sq-check);
+        pointer-events: none;
+      }
+
+      /* Indicadores de movimientos legales */
+      .legal-dot {
+        position: absolute;
+        width: 28%;
+        height: 28%;
+        border-radius: 50%;
+        background-color: rgba(24, 24, 27, 0.24);
+        pointer-events: none;
+        z-index: 2;
+      }
+
+      .square.dark .legal-dot {
+        background-color: rgba(255, 255, 255, 0.34);
+      }
+
+      .legal-capture {
+        position: absolute;
+        inset: 7%;
+        border-radius: 50%;
+        border: 3px solid rgba(24, 24, 27, 0.3);
+        pointer-events: none;
+        z-index: 2;
+      }
+
+      .square.dark .legal-capture {
+        border-color: rgba(255, 255, 255, 0.42);
+      }
+
+      /* Coordenadas sutiles en los bordes */
+      .coord-rank {
+        position: absolute;
+        top: 2px;
+        left: 3px;
+        font-size: 9px;
+        font-weight: 600;
+        line-height: 1;
+        opacity: 0.72;
+        pointer-events: none;
+        z-index: 1;
+      }
+
+      .coord-file {
+        position: absolute;
+        bottom: 2px;
+        right: 3px;
+        font-size: 9px;
+        font-weight: 600;
+        line-height: 1;
+        opacity: 0.72;
+        pointer-events: none;
+        z-index: 1;
+      }
+
+      /* Piezas SVG */
+      .piece-svg {
+        width: 82%;
+        height: 82%;
+        position: relative;
+        z-index: 3;
+        pointer-events: none;
+        transition: transform 140ms cubic-bezier(0.16, 1, 0.3, 1);
+      }
+
+      .square.selected .piece-svg {
+        transform: translateY(-2px) scale(1.06);
+      }
+
+      /* Overlays dentro del tablero (Promoción / Fin de partida) */
+      .board-overlay {
+        position: absolute;
+        inset: 0;
+        background-color: rgba(24, 24, 27, 0.56);
+        backdrop-filter: blur(4px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+        z-index: 20;
+      }
+
+      .board-overlay[hidden] {
+        display: none;
+      }
+
+      .overlay-card {
+        background-color: var(--bg-surface);
+        border: 1px solid var(--border-hairline);
+        border-radius: var(--radius-card);
+        padding: 20px;
+        width: 100%;
+        max-width: 320px;
+        text-align: center;
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.18);
+      }
+
+      .overlay-title {
+        margin: 0 0 6px;
+        font-size: 18px;
+        font-weight: 700;
+      }
+
+      .overlay-subtitle {
+        margin: 0 0 16px;
+        font-size: 14px;
+        color: var(--text-secondary);
+      }
+
+      .promo-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 8px;
+      }
+
+      .promo-btn {
+        min-height: 56px;
+        border: 1px solid var(--border-hairline);
+        border-radius: 10px;
+        background-color: var(--bg-canvas);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 2px;
+        transition: background-color 140ms ease, border-color 140ms ease;
+      }
+
+      .promo-btn:hover {
+        background-color: var(--bg-subtle);
+        border-color: var(--text-primary);
+      }
+
+      .promo-btn svg {
+        width: 34px;
+        height: 34px;
+      }
+
+      /* Panel lateral / inferior (QR, enlace, controles, historial) */
+      .side-column {
+        width: 100%;
+        max-width: 520px;
+        margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+
+      .panel-card {
+        background-color: var(--bg-surface);
+        border: 1px solid var(--border-hairline);
+        border-radius: var(--radius-card);
+        padding: 18px;
+      }
+
+      .panel-card[hidden] {
+        display: none;
+      }
+
+      .panel-heading {
+        margin: 0 0 6px;
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+      }
+
+      .panel-desc {
+        margin: 0 0 16px;
+        font-size: 13.5px;
+        line-height: 1.5;
+        color: var(--text-secondary);
+      }
+
+      /* Contenedor del código QR */
+      .qr-box {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+        padding: 16px;
+        background-color: var(--bg-canvas);
+        border: 1px solid var(--border-hairline);
+        border-radius: 12px;
+        margin-bottom: 14px;
+      }
+
+      .qr-svg-wrap {
+        width: 180px;
+        height: 180px;
+        padding: 10px;
+        background-color: #ffffff;
+        border-radius: 10px;
+        border: 1px solid var(--border-hairline);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .qr-svg-wrap svg {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+
+      .peer-id-line {
+        font-family: var(--font-mono);
+        font-variant-numeric: tabular-nums;
+        font-size: 12px;
+        color: var(--text-secondary);
+        word-break: break-all;
+        text-align: center;
+      }
+
+      .qr-note {
+        margin-top: 12px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background-color: var(--bg-canvas);
+        border: 1px solid var(--border-hairline);
+        font-size: 12.5px;
+        line-height: 1.45;
+        color: var(--text-secondary);
+      }
+
+      .url-mode-switch {
+        display: flex;
+        gap: 4px;
+        padding: 4px;
+        background-color: var(--bg-canvas);
+        border: 1px solid var(--border-hairline);
+        border-radius: 10px;
+        margin-bottom: 12px;
+      }
+
+      .url-mode-btn {
+        flex: 1;
+        min-height: 34px;
+        padding: 6px 10px;
+        border-radius: 7px;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        white-space: nowrap;
+        transition: background-color 140ms ease, color 140ms ease;
+      }
+
+      .url-mode-btn.active {
+        background-color: var(--bg-surface);
+        color: var(--text-primary);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+      }
+
+      /* Botones */
+      .btn-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .btn {
+        min-height: 44px;
+        padding: 10px 16px;
+        border-radius: 10px;
+        font-size: 14px;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        white-space: nowrap;
+        flex: 1;
+        transition: background-color 150ms ease, transform 120ms ease, border-color 150ms ease;
+      }
+
+      .btn:active {
+        transform: scale(0.98);
+      }
+
+      .btn-primary {
+        background-color: var(--accent);
+        color: #ffffff;
+      }
+
+      .btn-primary:hover {
+        background-color: #27272a;
+      }
+
+      .btn-secondary {
+        background-color: var(--bg-canvas);
+        color: var(--text-primary);
+        border: 1px solid var(--border-hairline);
+      }
+
+      .btn-secondary:hover {
+        background-color: var(--bg-subtle);
+      }
+
+      .btn-danger {
+        background-color: #ffffff;
+        color: var(--status-error);
+        border: 1px solid #fecaca;
+      }
+
+      .btn-danger:hover {
+        background-color: #fef2f2;
+      }
+
+      .btn:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+        transform: none;
+      }
+
+      /* Banner informativo de turno y estado de partida */
+      .game-banner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 14px;
+      }
+
+      .game-banner-main {
+        font-weight: 600;
+      }
+
+      .game-banner-sub {
+        font-family: var(--font-mono);
+        font-variant-numeric: tabular-nums;
+        font-size: 12px;
+        color: var(--text-muted);
+        white-space: nowrap;
+      }
+
+      /* Lista compacta de jugadas */
+      .moves-log {
+        margin-top: 12px;
+        padding-top: 12px;
+        border-top: 1px solid var(--border-hairline);
+        max-height: 150px;
+        overflow-y: auto;
+        font-family: var(--font-mono);
+        font-variant-numeric: tabular-nums;
+        font-size: 12.5px;
+        line-height: 1.7;
+        color: var(--text-secondary);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 12px;
+      }
+
+      .move-pair {
+        display: inline-flex;
+        gap: 6px;
+        white-space: nowrap;
+      }
+
+      .move-num {
+        color: var(--text-muted);
+      }
+
+      .empty-moves {
+        font-family: var(--font-sans);
+        font-size: 13px;
+        color: var(--text-muted);
+      }
+
+      /* Botón compacto de barra de acciones */
+      .actions-bar {
+        display: flex;
+        gap: 8px;
+      }
+
+      .action-btn {
+        flex: 1;
+        min-height: 44px;
+        padding: 8px 10px;
+        border-radius: 10px;
+        background-color: var(--bg-surface);
+        border: 1px solid var(--border-hairline);
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-primary);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        white-space: nowrap;
+        transition: background-color 140ms ease;
+      }
+
+      .action-btn:hover:not(:disabled) {
+        background-color: var(--bg-subtle);
+      }
+
+      .action-btn:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+
+      .feedback-toast {
+        font-size: 12.5px;
+        font-weight: 500;
+        color: var(--accent-emerald);
+        text-align: center;
+        min-height: 18px;
+        margin-top: 6px;
+      }
+
+      /* Confirmación inline sin window.confirm */
+      .inline-confirm {
+        margin-top: 10px;
+        padding: 12px;
+        border-radius: 10px;
+        background-color: var(--bg-canvas);
+        border: 1px solid var(--border-hairline);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        font-size: 13px;
+      }
+
+      .inline-confirm[hidden] {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <span class="brand">Ajedrez</span>
+
+        <div
+          id="live-status"
+          class="live-status waiting"
+          role="status"
+          aria-live="polite"
+        >
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="live-status-text">Esperando rival...</span>
+        </div>
+      </header>
+
+      <main class="main-content">
+        <!-- Columna del tablero -->
+        <section class="board-column" aria-label="Tablero de ajedrez">
+          <!-- Barra del rival (arriba) -->
+          <div id="top-player-strip" class="player-strip">
+            <div class="player-identity">
+              <span id="top-swatch" class="color-swatch black"></span>
+              <span id="top-name" class="player-name">Negras</span>
+              <span class="player-meta">· Rival</span>
+            </div>
+            <div class="captured-row">
+              <span id="top-captured" class="captured-pieces"></span>
+              <span id="top-adv" class="material-adv"></span>
+              <span id="top-turn-tag" class="turn-tag" hidden>Su turno</span>
+            </div>
+          </div>
+
+          <!-- Tablero 8x8 -->
+          <div class="board-wrapper">
+            <div id="board-grid" class="board-grid" role="grid" aria-label="Tablero"></div>
+
+            <!-- Modal inline de promoción de peón -->
+            <div id="promo-overlay" class="board-overlay" hidden>
+              <div class="overlay-card">
+                <h2 class="overlay-title">Coronar peón</h2>
+                <p class="overlay-subtitle">Elige la nueva pieza</p>
+                <div id="promo-grid" class="promo-grid"></div>
+              </div>
+            </div>
+
+            <!-- Modal inline de fin de partida -->
+            <div id="gameover-overlay" class="board-overlay" hidden>
+              <div class="overlay-card">
+                <h2 id="gameover-title" class="overlay-title">Partida terminada</h2>
+                <p id="gameover-subtitle" class="overlay-subtitle"></p>
+                <div class="btn-row">
+                  <button id="btn-rematch" type="button" class="btn btn-primary">
+                    Revancha
+                  </button>
+                  <button id="btn-close-overlay" type="button" class="btn btn-secondary">
+                    Ver tablero
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Barra del jugador local (abajo) -->
+          <div id="bottom-player-strip" class="player-strip active-turn">
+            <div class="player-identity">
+              <span id="bottom-swatch" class="color-swatch white"></span>
+              <span id="bottom-name" class="player-name">Blancas</span>
+              <span class="player-meta">· Tú</span>
+            </div>
+            <div class="captured-row">
+              <span id="bottom-captured" class="captured-pieces"></span>
+              <span id="bottom-adv" class="material-adv"></span>
+              <span id="bottom-turn-tag" class="turn-tag">Tu turno</span>
+            </div>
+          </div>
+
+          <!-- Controles rápidos en zona de pulgar -->
+          <div class="actions-bar">
+            <button id="btn-toggle-qr" type="button" class="action-btn">
+              Código QR
+            </button>
+            <button id="btn-resign" type="button" class="action-btn" disabled>
+              Rendirse
+            </button>
+            <button id="btn-sound" type="button" class="action-btn" aria-pressed="true">
+              Sonido: Sí
+            </button>
+          </div>
+
+          <div id="resign-confirm" class="inline-confirm" hidden>
+            <span>¿Confirmar rendición?</span>
+            <div style="display:flex;gap:6px;">
+              <button id="btn-confirm-resign" type="button" class="btn btn-danger" style="min-height:36px;padding:6px 12px;font-size:12.5px;">
+                Sí, rendirse
+              </button>
+              <button id="btn-cancel-resign" type="button" class="btn btn-secondary" style="min-height:36px;padding:6px 12px;font-size:12.5px;">
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Columna de conexión QR e historial -->
+        <aside class="side-column">
+          <!-- Tarjeta de código QR (visible al anfitrión por defecto) -->
+          <section id="qr-card" class="panel-card">
+            <h1 class="panel-heading">Invita a tu rival</h1>
+            <p id="qr-instructions" class="panel-desc">
+              Escanea este código QR con el segundo celular para conectar ambos dispositivos directamente.
+            </p>
+
+            <div class="qr-box">
+              <div id="qr-svg-wrap" class="qr-svg-wrap" aria-label="Código QR de invitación">
+                <span style="font-size:12px;color:#71717a;">Generando QR...</span>
+              </div>
+              <div id="peer-id-label" class="peer-id-line">Preparando sala P2P...</div>
+            </div>
+
+            <div id="url-mode-switch" class="url-mode-switch" hidden>
+              <button id="btn-mode-dev" type="button" class="url-mode-btn active">
+                URL actual
+              </button>
+              <button id="btn-mode-pre" type="button" class="url-mode-btn">
+                URL compartida (Share)
+              </button>
+            </div>
+
+            <div class="btn-row">
+              <button id="btn-copy-link" type="button" class="btn btn-primary" disabled>
+                Copiar enlace
+              </button>
+              <button id="btn-share-link" type="button" class="btn btn-secondary" hidden>
+                Compartir
+              </button>
+              <button id="btn-download-html" type="button" class="btn btn-secondary">
+                Descargar HTML
+              </button>
+            </div>
+            <div id="copy-feedback" class="feedback-toast" aria-live="polite"></div>
+            <div id="preview-access-note" class="qr-note" hidden>
+              La vista previa privada (<strong>ais-dev</strong>) solo abre con tu cuenta de Google (da 403 en otro celular) y la URL compartida (<strong>ais-pre</strong>) da 404 hasta pulsar <strong>Share</strong> arriba en AI Studio. Para jugar al instante en cualquier celular, usa <strong>Descargar HTML</strong> y ábrelo en un servidor estático o comparte la app.
+            </div>
+          </section>
+
+          <!-- Tarjeta de reconexión para el invitado si se desconecta -->
+          <section id="guest-card" class="panel-card" hidden>
+            <h2 id="guest-heading" class="panel-heading">Conexión directa</h2>
+            <p id="guest-desc" class="panel-desc">
+              Conectando con el celular del anfitrión mediante PeerJS...
+            </p>
+            <div class="btn-row">
+              <button id="btn-reconnect" type="button" class="btn btn-primary" hidden>
+                Reintentar conexión
+              </button>
+              <button id="btn-new-host" type="button" class="btn btn-secondary">
+                Crear partida nueva
+              </button>
+            </div>
+          </section>
+
+          <!-- Estado de la partida e historial -->
+          <section class="panel-card">
+            <div class="game-banner">
+              <span id="game-status-text" class="game-banner-main">Turno de las blancas</span>
+              <span id="move-counter" class="game-banner-sub">Jugada 1</span>
+            </div>
+            <div id="moves-log" class="moves-log">
+              <span class="empty-moves">Las jugadas aparecerán aquí.</span>
+            </div>
+          </section>
+        </aside>
+      </main>
+    </div>
+
+    <script>
+      (function () {
+        'use strict';
+
+        // ============================================================
+        // 1. PIEZAS SVG MINIMALISTAS (ESTILO STAUNTON ARQUITECTÓNICO)
+        // ============================================================
+        function pieceSvg(color, type) {
+          const fill = color === 'w' ? '#FAF9F6' : '#1E1E22';
+          const stroke = color === 'w' ? '#18181B' : '#111113';
+          const detail = color === 'w' ? '#18181B' : '#EAEAE6';
+
+          const shapes = {
+            P: `
+              <path d="M22.5 9c-2.21 0-4 1.79-4 4 0 .89.29 1.71.78 2.38C17.33 16.5 16 18.59 16 21c0 2.03.94 3.84 2.41 5.03-3 1.06-7.41 5.55-7.41 13.47h23c0-7.92-4.41-12.41-7.41-13.47 1.47-1.19 2.41-3 2.41-5.03 0-2.41-1.33-4.5-3.28-5.62.49-.67.78-1.49.78-2.38 0-2.21-1.79-4-4-4z"
+                fill="${fill}" stroke="${stroke}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+            `,
+            R: `
+              <g fill="${fill}" stroke="${stroke}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 39h27v-3H9v3zM12 36v-4h21v4H12zM11 14V9h4v2h5V9h5v2h5V9h4v5"/>
+                <path d="M34 14l-3 3H14l-3-3"/>
+                <path d="M31 17v12.5H14V17"/>
+                <path d="M31 29.5l1.5 2.5h-20l1.5-2.5"/>
+                <path d="M14 17h17" stroke="${detail}" stroke-width="1.2"/>
+              </g>
+            `,
+            N: `
+              <g fill="${fill}" stroke="${stroke}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M 22,10 C 32.5,11 38.5,18 38,39 L 15,39 C 15,30 25,32.5 23,18"/>
+                <path d="M 24,18 C 24.38,20.91 18.45,25.37 16,27 C 13,29 13.18,31.34 11,31 C 9.958,30.06 12.41,27.96 11,28 C 10,28 11.19,29.23 10,30 C 9,30 5.997,31 6,26 C 6,24 12,14 12,14 C 12,14 13.89,12.1 14,10.5 C 13.27,9.506 13.5,8.5 13.5,7.5 C 14.5,6.5 16.5,10 16.5,10 L 18.5,10 C 18.5,10 19.28,8.008 21,7 C 22,7 22,10 22,10"/>
+                <circle cx="15" cy="15.5" r="1" fill="${detail}" stroke="none"/>
+              </g>
+            `,
+            B: `
+              <g fill="${fill}" stroke="${stroke}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 36c3.39-.97 10.11.43 13.5-2 3.39 2.43 10.11 1.03 13.5 2 0 0 1.65.54 3 2-.68.97-1.65.99-3 .5-3.39-.97-10.11.46-13.5-1-3.39 1.46-10.11.03-13.5 1-1.354.49-2.323.47-3-.5 1.354-1.94 3-2 3-2z"/>
+                <path d="M15 32c2.5 2.5 12.5 2.5 15 0 .5-1.5 0-2 0-2 0-2.5-2.5-4-2.5-4 5.5-1.5 6-11.5-5-15.5-11 4-10.5 14-5 15.5 0 0-2.5 1.5-2.5 4 0 0-.5.5 0 2z"/>
+                <circle cx="22.5" cy="8" r="2.2"/>
+                <path d="M17.5 26h10M20 15.5l5 5M25 15.5l-5 5" stroke="${detail}" stroke-width="1.3" fill="none"/>
+              </g>
+            `,
+            Q: `
+              <g fill="${fill}" stroke="${stroke}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="6" cy="12" r="2.2"/>
+                <circle cx="14" cy="9" r="2.2"/>
+                <circle cx="22.5" cy="8" r="2.2"/>
+                <circle cx="31" cy="9" r="2.2"/>
+                <circle cx="39" cy="12" r="2.2"/>
+                <path d="M9 26c8.5-1.5 21-1.5 27 0l2.5-12.5L31 25l-.3-14.1-5.2 13.6-3-14.5-3 14.5-5.2-13.6L14 25 6.5 13.5 9 26z"/>
+                <path d="M9 26c0 2 1.5 2 2.5 4 1 1.5 1 1 .5 3.5-1.5 1-1.5 2.5-1.5 2.5-1.5 1.5.5 2.5.5 2.5 6.5 1 16.5 1 23 0 0 0 1.5-1 0-2.5 0 0 .5-1.5-1-2.5-.5-2.5-.5-2 .5-3.5 1-2 2.5-2 2.5-4-8.5-1.5-18.5-1.5-27 0z"/>
+                <path d="M11.5 30c3.5-1 18.5-1 22 0M12 33.5c6-1 15-1 21 0" stroke="${detail}" stroke-width="1.2" fill="none"/>
+              </g>
+            `,
+            K: `
+              <g fill="${fill}" stroke="${stroke}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22.5 11.63V6M20 8h5" stroke="${stroke}" stroke-width="1.8"/>
+                <path d="M22.5 25s4.5-7.5 3-10.5c0 0-1-2.5-3-2.5s-3 2.5-3 2.5c-1.5 3 3 10.5 3 10.5"/>
+                <path d="M11.5 37c5.5 3.5 15.5 3.5 21 0v-7s9-4.5 6-10.5c-4-6.5-13.5-3.5-16 4V27v-3.5c-3.5-7.5-13-10.5-16-4-3 6 5 10 5 10V37z"/>
+                <path d="M11.5 30c5.5-3 15.5-3 21 0m-21 3.5c5.5-3 15.5-3 21 0m-21 3.5c5.5-3 15.5-3 21 0" stroke="${detail}" stroke-width="1.2" fill="none"/>
+              </g>
+            `,
+          };
+
+          return `<svg class="piece-svg" viewBox="0 0 45 45" aria-hidden="true">${shapes[type]}</svg>`;
+        }
+
+        const UNICODE_PIECES = {
+          w: { K: '♔', Q: '♕', R: '♖', B: '♗', N: '♘', P: '♙' },
+          b: { K: '♚', Q: '♛', R: '♜', B: '♝', N: '♞', P: '♟' },
+        };
+
+        const PIECE_VALUES = { P: 1, N: 3, B: 3, R: 5, Q: 9, K: 0 };
+        const PIECE_ORDER = { Q: 0, R: 1, B: 2, N: 3, P: 4 };
+        const SAN_LETTER = { K: 'R', Q: 'D', R: 'T', B: 'A', N: 'C', P: '' };
+
+        // ============================================================
+        // 2. MOTOR COMPLETO DE AJEDREZ (REGLAS FIDE)
+        // ============================================================
+        function createInitialState() {
+          const backRank = ['R', 'N', 'B', 'Q', 'K', 'B', 'N', 'R'];
+          const board = Array.from({ length: 8 }, () => Array(8).fill(null));
+          for (let c = 0; c < 8; c++) {
+            board[0][c] = { color: 'b', type: backRank[c] };
+            board[1][c] = { color: 'b', type: 'P' };
+            board[6][c] = { color: 'w', type: 'P' };
+            board[7][c] = { color: 'w', type: backRank[c] };
+          }
+          const state = {
+            board,
+            turn: 'w',
+            castling: { wK: true, wQ: true, bK: true, bQ: true },
+            enPassant: null,
+            halfMoveClock: 0,
+            fullMoveNumber: 1,
+            history: [],
+            lastMove: null,
+            captured: { w: [], b: [] },
+            positionCounts: {},
+            status: 'playing',
+            winner: null,
+          };
+          const key = getPositionKey(state);
+          state.positionCounts[key] = 1;
+          return state;
+        }
+
+        function cloneState(s) {
+          return {
+            board: s.board.map((row) => row.map((p) => (p ? { ...p } : null))),
+            turn: s.turn,
+            castling: { ...s.castling },
+            enPassant: s.enPassant ? { ...s.enPassant } : null,
+            halfMoveClock: s.halfMoveClock,
+            fullMoveNumber: s.fullMoveNumber,
+            history: [...s.history],
+            lastMove: s.lastMove
+              ? { from: [...s.lastMove.from], to: [...s.lastMove.to] }
+              : null,
+            captured: { w: [...s.captured.w], b: [...s.captured.b] },
+            positionCounts: { ...s.positionCounts },
+            status: s.status,
+            winner: s.winner,
+          };
+        }
+
+        function opposite(color) {
+          return color === 'w' ? 'b' : 'w';
+        }
+
+        function inBounds(r, c) {
+          return r >= 0 && r < 8 && c >= 0 && c < 8;
+        }
+
+        function findKing(board, color) {
+          for (let r = 0; r < 8; r++) {
+            for (let c = 0; c < 8; c++) {
+              const p = board[r][c];
+              if (p && p.color === color && p.type === 'K') return [r, c];
+            }
+          }
+          return null;
+        }
+
+        function isSquareAttacked(board, targetR, targetC, byColor) {
+          // Peones
+          const pawnDir = byColor === 'w' ? 1 : -1;
+          for (const dc of [-1, 1]) {
+            const pr = targetR + pawnDir;
+            const pc = targetC + dc;
+            if (inBounds(pr, pc)) {
+              const p = board[pr][pc];
+              if (p && p.color === byColor && p.type === 'P') return true;
+            }
+          }
+
+          // Caballos
+          const knightDeltas = [
+            [-2, -1], [-2, 1], [-1, -2], [-1, 2],
+            [1, -2], [1, 2], [2, -1], [2, 1],
+          ];
+          for (const [dr, dc] of knightDeltas) {
+            const nr = targetR + dr;
+            const nc = targetC + dc;
+            if (inBounds(nr, nc)) {
+              const p = board[nr][nc];
+              if (p && p.color === byColor && p.type === 'N') return true;
+            }
+          }
+
+          // Rey
+          for (let dr = -1; dr <= 1; dr++) {
+            for (let dc = -1; dc <= 1; dc++) {
+              if (dr === 0 && dc === 0) continue;
+              const kr = targetR + dr;
+              const kc = targetC + dc;
+              if (inBounds(kr, kc)) {
+                const p = board[kr][kc];
+                if (p && p.color === byColor && p.type === 'K') return true;
+              }
+            }
+          }
+
+          // Diagonales (Alfil / Dama)
+          const diagDirs = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
+          for (const [dr, dc] of diagDirs) {
+            let r = targetR + dr;
+            let c = targetC + dc;
+            while (inBounds(r, c)) {
+              const p = board[r][c];
+              if (p) {
+                if (p.color === byColor && (p.type === 'B' || p.type === 'Q')) return true;
+                break;
+              }
+              r += dr;
+              c += dc;
+            }
+          }
+
+          // Ortogonales (Torre / Dama)
+          const orthoDirs = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+          for (const [dr, dc] of orthoDirs) {
+            let r = targetR + dr;
+            let c = targetC + dc;
+            while (inBounds(r, c)) {
+              const p = board[r][c];
+              if (p) {
+                if (p.color === byColor && (p.type === 'R' || p.type === 'Q')) return true;
+                break;
+              }
+              r += dr;
+              c += dc;
+            }
+          }
+
+          return false;
+        }
+
+        function isInCheck(board, color) {
+          const kingPos = findKing(board, color);
+          if (!kingPos) return false;
+          return isSquareAttacked(board, kingPos[0], kingPos[1], opposite(color));
+        }
+
+        function getPseudoLegalMoves(state, r, c) {
+          const piece = state.board[r][c];
+          if (!piece) return [];
+          const moves = [];
+          const color = piece.color;
+          const enemy = opposite(color);
+
+          if (piece.type === 'P') {
+            const dir = color === 'w' ? -1 : 1;
+            const startRow = color === 'w' ? 6 : 1;
+            const promoRow = color === 'w' ? 0 : 7;
+
+            // Avance simple
+            const r1 = r + dir;
+            if (inBounds(r1, c) && !state.board[r1][c]) {
+              moves.push({
+                from: [r, c],
+                to: [r1, c],
+                isPromotion: r1 === promoRow,
+              });
+              // Avance doble
+              const r2 = r + 2 * dir;
+              if (r === startRow && !state.board[r2][c]) {
+                moves.push({
+                  from: [r, c],
+                  to: [r2, c],
+                  isDoublePawn: true,
+                });
+              }
+            }
+
+            // Capturas y captura al paso
+            for (const dc of [-1, 1]) {
+              const tc = c + dc;
+              if (!inBounds(r1, tc)) continue;
+              const target = state.board[r1][tc];
+              if (target && target.color === enemy) {
+                moves.push({
+                  from: [r, c],
+                  to: [r1, tc],
+                  isCapture: true,
+                  isPromotion: r1 === promoRow,
+                });
+              } else if (
+                state.enPassant &&
+                state.enPassant.r === r1 &&
+                state.enPassant.c === tc
+              ) {
+                moves.push({
+                  from: [r, c],
+                  to: [r1, tc],
+                  isCapture: true,
+                  isEnPassant: true,
+                });
+              }
+            }
+          } else if (piece.type === 'N') {
+            const deltas = [
+              [-2, -1], [-2, 1], [-1, -2], [-1, 2],
+              [1, -2], [1, 2], [2, -1], [2, 1],
+            ];
+            for (const [dr, dc] of deltas) {
+              const tr = r + dr;
+              const tc = c + dc;
+              if (!inBounds(tr, tc)) continue;
+              const target = state.board[tr][tc];
+              if (!target || target.color === enemy) {
+                moves.push({ from: [r, c], to: [tr, tc], isCapture: !!target });
+              }
+            }
+          } else if (piece.type === 'B' || piece.type === 'R' || piece.type === 'Q') {
+            const dirs = [];
+            if (piece.type === 'B' || piece.type === 'Q') {
+              dirs.push([-1, -1], [-1, 1], [1, -1], [1, 1]);
+            }
+            if (piece.type === 'R' || piece.type === 'Q') {
+              dirs.push([-1, 0], [1, 0], [0, -1], [0, 1]);
+            }
+            for (const [dr, dc] of dirs) {
+              let tr = r + dr;
+              let tc = c + dc;
+              while (inBounds(tr, tc)) {
+                const target = state.board[tr][tc];
+                if (!target) {
+                  moves.push({ from: [r, c], to: [tr, tc] });
+                } else {
+                  if (target.color === enemy) {
+                    moves.push({ from: [r, c], to: [tr, tc], isCapture: true });
+                  }
+                  break;
+                }
+                tr += dr;
+                tc += dc;
+              }
+            }
+          } else if (piece.type === 'K') {
+            for (let dr = -1; dr <= 1; dr++) {
+              for (let dc = -1; dc <= 1; dc++) {
+                if (dr === 0 && dc === 0) continue;
+                const tr = r + dr;
+                const tc = c + dc;
+                if (!inBounds(tr, tc)) continue;
+                const target = state.board[tr][tc];
+                if (!target || target.color === enemy) {
+                  moves.push({ from: [r, c], to: [tr, tc], isCapture: !!target });
+                }
+              }
+            }
+
+            // Enroques
+            const homeRow = color === 'w' ? 7 : 0;
+            if (r === homeRow && c === 4 && !isInCheck(state.board, color)) {
+              const canKingSide = color === 'w' ? state.castling.wK : state.castling.bK;
+              const canQueenSide = color === 'w' ? state.castling.wQ : state.castling.bQ;
+              const rookK = state.board[homeRow][7];
+              const rookQ = state.board[homeRow][0];
+
+              if (
+                canKingSide &&
+                rookK &&
+                rookK.color === color &&
+                rookK.type === 'R' &&
+                !state.board[homeRow][5] &&
+                !state.board[homeRow][6] &&
+                !isSquareAttacked(state.board, homeRow, 5, enemy) &&
+                !isSquareAttacked(state.board, homeRow, 6, enemy)
+              ) {
+                moves.push({ from: [r, c], to: [homeRow, 6], isCastle: 'K' });
+              }
+
+              if (
+                canQueenSide &&
+                rookQ &&
+                rookQ.color === color &&
+                rookQ.type === 'R' &&
+                !state.board[homeRow][3] &&
+                !state.board[homeRow][2] &&
+                !state.board[homeRow][1] &&
+                !isSquareAttacked(state.board, homeRow, 3, enemy) &&
+                !isSquareAttacked(state.board, homeRow, 2, enemy)
+              ) {
+                moves.push({ from: [r, c], to: [homeRow, 2], isCastle: 'Q' });
+              }
+            }
+          }
+
+          return moves;
+        }
+
+        function getLegalMovesForSquare(state, r, c) {
+          const piece = state.board[r][c];
+          if (!piece || piece.color !== state.turn) return [];
+          const pseudo = getPseudoLegalMoves(state, r, c);
+          return pseudo.filter((move) => {
+            const testBoard = state.board.map((row) =>
+              row.map((p) => (p ? { ...p } : null))
+            );
+            const [fr, fc] = move.from;
+            const [tr, tc] = move.to;
+            const moving = testBoard[fr][fc];
+            testBoard[tr][tc] = moving;
+            testBoard[fr][fc] = null;
+            if (move.isEnPassant) {
+              testBoard[fr][tc] = null;
+            }
+            if (move.isCastle === 'K') {
+              testBoard[fr][5] = testBoard[fr][7];
+              testBoard[fr][7] = null;
+            } else if (move.isCastle === 'Q') {
+              testBoard[fr][3] = testBoard[fr][0];
+              testBoard[fr][0] = null;
+            }
+            return !isInCheck(testBoard, piece.color);
+          });
+        }
+
+        function getAllLegalMoves(state) {
+          const all = [];
+          for (let r = 0; r < 8; r++) {
+            for (let c = 0; c < 8; c++) {
+              const p = state.board[r][c];
+              if (p && p.color === state.turn) {
+                const sqMoves = getLegalMovesForSquare(state, r, c);
+                for (const m of sqMoves) all.push(m);
+              }
+            }
+          }
+          return all;
+        }
+
+        function hasInsufficientMaterial(board) {
+          const pieces = [];
+          for (let r = 0; r < 8; r++) {
+            for (let c = 0; c < 8; c++) {
+              const p = board[r][c];
+              if (p && p.type !== 'K') {
+                pieces.push({ ...p, sqColor: (r + c) % 2 });
+              }
+            }
+          }
+          if (pieces.length === 0) return true;
+          if (pieces.length === 1 && (pieces[0].type === 'N' || pieces[0].type === 'B')) {
+            return true;
+          }
+          if (
+            pieces.length === 2 &&
+            pieces[0].type === 'B' &&
+            pieces[1].type === 'B' &&
+            pieces[0].sqColor === pieces[1].sqColor
+          ) {
+            return true;
+          }
+          return false;
+        }
+
+        function getPositionKey(state) {
+          let rows = '';
+          for (let r = 0; r < 8; r++) {
+            let empty = 0;
+            for (let c = 0; c < 8; c++) {
+              const p = state.board[r][c];
+              if (!p) {
+                empty++;
+              } else {
+                if (empty) {
+                  rows += empty;
+                  empty = 0;
+                }
+                rows += p.color === 'w' ? p.type : p.type.toLowerCase();
+              }
+            }
+            if (empty) rows += empty;
+            if (r < 7) rows += '/';
+          }
+          const c = state.castling;
+          const cast =
+            (c.wK ? 'K' : '') +
+              (c.wQ ? 'Q' : '') +
+              (c.bK ? 'k' : '') +
+              (c.bQ ? 'q' : '') || '-';
+          const ep = state.enPassant ? `${state.enPassant.r},${state.enPassant.c}` : '-';
+          return `${rows} ${state.turn} ${cast} ${ep}`;
+        }
+
+        function squareName(r, c) {
+          return String.fromCharCode(97 + c) + String(8 - r);
+        }
+
+        function formatAlgebraic(prevState, move, nextState, inCheckNow, isMateNow) {
+          if (move.isCastle === 'K') {
+            return 'O-O' + (isMateNow ? '#' : inCheckNow ? '+' : '');
+          }
+          if (move.isCastle === 'Q') {
+            return 'O-O-O' + (isMateNow ? '#' : inCheckNow ? '+' : '');
+          }
+          const [fr, fc] = move.from;
+          const [tr, tc] = move.to;
+          const piece = prevState.board[fr][fc];
+          let str = '';
+          if (piece.type === 'P') {
+            if (move.isCapture) {
+              str += String.fromCharCode(97 + fc) + 'x';
+            }
+            str += squareName(tr, tc);
+            if (move.isPromotion) {
+              str += '=' + SAN_LETTER[move.promotion || 'Q'];
+            }
+          } else {
+            str += SAN_LETTER[piece.type];
+            // Desambiguación simple si otra pieza igual puede ir al destino
+            const peers = [];
+            for (let r = 0; r < 8; r++) {
+              for (let c = 0; c < 8; c++) {
+                if (r === fr && c === fc) continue;
+                const other = prevState.board[r][c];
+                if (other && other.color === piece.color && other.type === piece.type) {
+                  const otherMoves = getLegalMovesForSquare(prevState, r, c);
+                  if (otherMoves.some((m) => m.to[0] === tr && m.to[1] === tc)) {
+                    peers.push([r, c]);
+                  }
+                }
+              }
+            }
+            if (peers.length > 0) {
+              const sameFile = peers.some(([, c]) => c === fc);
+              const sameRank = peers.some(([r]) => r === fr);
+              if (!sameFile) str += String.fromCharCode(97 + fc);
+              else if (!sameRank) str += String(8 - fr);
+              else str += squareName(fr, fc);
+            }
+            if (move.isCapture) str += 'x';
+            str += squareName(tr, tc);
+          }
+          if (isMateNow) str += '#';
+          else if (inCheckNow) str += '+';
+          return str;
+        }
+
+        function applyMove(state, move) {
+          const next = cloneState(state);
+          const [fr, fc] = move.from;
+          const [tr, tc] = move.to;
+          const piece = next.board[fr][fc];
+          const color = piece.color;
+          const enemy = opposite(color);
+
+          let capturedPiece = next.board[tr][tc];
+          if (move.isEnPassant) {
+            capturedPiece = next.board[fr][tc];
+            next.board[fr][tc] = null;
+          }
+
+          if (capturedPiece) {
+            next.captured[color].push(capturedPiece.type);
+            next.captured[color].sort((a, b) => PIECE_ORDER[a] - PIECE_ORDER[b]);
+          }
+
+          // Mover pieza
+          next.board[tr][tc] = move.isPromotion
+            ? { color, type: move.promotion || 'Q' }
+            : { ...piece };
+          next.board[fr][fc] = null;
+
+          // Mover torre en enroque
+          if (move.isCastle === 'K') {
+            next.board[fr][5] = next.board[fr][7];
+            next.board[fr][7] = null;
+          } else if (move.isCastle === 'Q') {
+            next.board[fr][3] = next.board[fr][0];
+            next.board[fr][0] = null;
+          }
+
+          // Actualizar derechos de enroque
+          if (piece.type === 'K') {
+            if (color === 'w') {
+              next.castling.wK = false;
+              next.castling.wQ = false;
+            } else {
+              next.castling.bK = false;
+              next.castling.bQ = false;
+            }
+          }
+          if (piece.type === 'R') {
+            if (fr === 7 && fc === 7) next.castling.wK = false;
+            if (fr === 7 && fc === 0) next.castling.wQ = false;
+            if (fr === 0 && fc === 7) next.castling.bK = false;
+            if (fr === 0 && fc === 0) next.castling.bQ = false;
+          }
+          if (tr === 7 && tc === 7) next.castling.wK = false;
+          if (tr === 7 && tc === 0) next.castling.wQ = false;
+          if (tr === 0 && tc === 7) next.castling.bK = false;
+          if (tr === 0 && tc === 0) next.castling.bQ = false;
+
+          // Al paso
+          if (move.isDoublePawn) {
+            next.enPassant = { r: (fr + tr) / 2, c: fc };
+          } else {
+            next.enPassant = null;
+          }
+
+          // Reloj 50 jugadas
+          if (piece.type === 'P' || capturedPiece) {
+            next.halfMoveClock = 0;
+          } else {
+            next.halfMoveClock += 1;
+          }
+
+          if (color === 'b') {
+            next.fullMoveNumber += 1;
+          }
+
+          next.turn = enemy;
+          next.lastMove = { from: [fr, fc], to: [tr, tc] };
+
+          // Evaluar estado de la partida
+          const legalNext = getAllLegalMoves(next);
+          const enemyInCheck = isInCheck(next.board, enemy);
+          let isMate = false;
+
+          if (legalNext.length === 0) {
+            if (enemyInCheck) {
+              next.status = 'checkmate';
+              next.winner = color;
+              isMate = true;
+            } else {
+              next.status = 'stalemate';
+              next.winner = null;
+            }
+          } else if (hasInsufficientMaterial(next.board)) {
+            next.status = 'draw_insufficient';
+          } else if (next.halfMoveClock >= 100) {
+            next.status = 'draw_fifty';
+          } else {
+            const key = getPositionKey(next);
+            next.positionCounts[key] = (next.positionCounts[key] || 0) + 1;
+            if (next.positionCounts[key] >= 3) {
+              next.status = 'draw_repetition';
+            }
+          }
+
+          const san = formatAlgebraic(state, move, next, enemyInCheck, isMate);
+          next.history.push(san);
+
+          return next;
+        }
+
+        // ============================================================
+        // 3. AUDIO SUTIL (WEB AUDIO API)
+        // ============================================================
+        let soundEnabled = true;
+        let audioCtx = null;
+
+        function playMoveSound(type) {
+          if (!soundEnabled) return;
+          try {
+            if (!audioCtx) {
+              const Ctx = window.AudioContext || window.webkitAudioContext;
+              if (!Ctx) return;
+              audioCtx = new Ctx();
+            }
+            if (audioCtx.state === 'suspended') {
+              audioCtx.resume();
+            }
+            const now = audioCtx.currentTime;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            if (type === 'capture') {
+              osc.type = 'triangle';
+              osc.frequency.setValueAtTime(240, now);
+              osc.frequency.exponentialRampToValueAtTime(95, now + 0.08);
+              gain.gain.setValueAtTime(0.16, now);
+              gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+              osc.start(now);
+              osc.stop(now + 0.09);
+            } else if (type === 'check') {
+              osc.type = 'sine';
+              osc.frequency.setValueAtTime(520, now);
+              osc.frequency.exponentialRampToValueAtTime(660, now + 0.12);
+              gain.gain.setValueAtTime(0.12, now);
+              gain.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+              osc.start(now);
+              osc.stop(now + 0.14);
+            } else {
+              osc.type = 'sine';
+              osc.frequency.setValueAtTime(190, now);
+              osc.frequency.exponentialRampToValueAtTime(110, now + 0.06);
+              gain.gain.setValueAtTime(0.11, now);
+              gain.gain.exponentialRampToValueAtTime(0.001, now + 0.065);
+              osc.start(now);
+              osc.stop(now + 0.065);
+            }
+          } catch (_) {
+            // Ignorar si el navegador bloquea Web Audio
+          }
+        }
+
+        // ============================================================
+        // 4. ESTADO DE APLICACIÓN Y CONEXIÓN P2P (PEERJS)
+        // ============================================================
+        const urlParams = new URLSearchParams(window.location.search);
+        const hostIdFromUrl = urlParams.get('id');
+        const isHost = !hostIdFromUrl;
+
+        let myColor = isHost ? 'w' : 'b';
+        let gameState = createInitialState();
+        let selectedSquare = null; // [r, c]
+        let legalMovesForSelected = [];
+        let pendingPromotion = null; // { from, to, ... }
+        let overlayDismissed = false;
+
+        let peer = null;
+        let conn = null;
+        let isRivalConnected = false;
+        let shareUrl = '';
+        let qrVisible = isHost;
+
+        const PEER_CONFIG = {
+          debug: 0,
+          config: {
+            iceServers: [
+              { urls: 'stun:stun.l.google.com:19302' },
+              { urls: 'stun:stun1.l.google.com:19302' },
+              { urls: 'stun:stun2.l.google.com:19302' },
+            ],
+          },
+        };
+
+        // Referencias DOM
+        const liveStatusEl = document.getElementById('live-status');
+        const liveStatusTextEl = document.getElementById('live-status-text');
+        const boardGridEl = document.getElementById('board-grid');
+
+        const topStripEl = document.getElementById('top-player-strip');
+        const bottomStripEl = document.getElementById('bottom-player-strip');
+        const topSwatchEl = document.getElementById('top-swatch');
+        const bottomSwatchEl = document.getElementById('bottom-swatch');
+        const topNameEl = document.getElementById('top-name');
+        const bottomNameEl = document.getElementById('bottom-name');
+        const topCapturedEl = document.getElementById('top-captured');
+        const bottomCapturedEl = document.getElementById('bottom-captured');
+        const topAdvEl = document.getElementById('top-adv');
+        const bottomAdvEl = document.getElementById('bottom-adv');
+        const topTurnTagEl = document.getElementById('top-turn-tag');
+        const bottomTurnTagEl = document.getElementById('bottom-turn-tag');
+
+        const promoOverlayEl = document.getElementById('promo-overlay');
+        const promoGridEl = document.getElementById('promo-grid');
+        const gameoverOverlayEl = document.getElementById('gameover-overlay');
+        const gameoverTitleEl = document.getElementById('gameover-title');
+        const gameoverSubtitleEl = document.getElementById('gameover-subtitle');
+
+        const qrCardEl = document.getElementById('qr-card');
+        const qrSvgWrapEl = document.getElementById('qr-svg-wrap');
+        const peerIdLabelEl = document.getElementById('peer-id-label');
+        const btnCopyLink = document.getElementById('btn-copy-link');
+        const btnShareLink = document.getElementById('btn-share-link');
+        const btnDownloadHtml = document.getElementById('btn-download-html');
+        const copyFeedbackEl = document.getElementById('copy-feedback');
+        const previewAccessNoteEl = document.getElementById('preview-access-note');
+        const urlModeSwitchEl = document.getElementById('url-mode-switch');
+        const btnModeDev = document.getElementById('btn-mode-dev');
+        const btnModePre = document.getElementById('btn-mode-pre');
+        let currentHostPeerId = null;
+        let useSharedPreviewUrl = false;
+
+        const guestCardEl = document.getElementById('guest-card');
+        const guestHeadingEl = document.getElementById('guest-heading');
+        const guestDescEl = document.getElementById('guest-desc');
+        const btnReconnect = document.getElementById('btn-reconnect');
+        const btnNewHost = document.getElementById('btn-new-host');
+
+        const btnToggleQr = document.getElementById('btn-toggle-qr');
+        const btnResign = document.getElementById('btn-resign');
+        const btnSound = document.getElementById('btn-sound');
+        const resignConfirmEl = document.getElementById('resign-confirm');
+        const btnConfirmResign = document.getElementById('btn-confirm-resign');
+        const btnCancelResign = document.getElementById('btn-cancel-resign');
+
+        const btnRematch = document.getElementById('btn-rematch');
+        const btnCloseOverlay = document.getElementById('btn-close-overlay');
+
+        const gameStatusTextEl = document.getElementById('game-status-text');
+        const moveCounterEl = document.getElementById('move-counter');
+        const movesLogEl = document.getElementById('moves-log');
+
+        // ============================================================
+        // 5. RENDERIZADO DE UI Y TABLERO
+        // ============================================================
+        function setConnectionIndicator(state, label) {
+          liveStatusEl.className = 'live-status ' + state;
+          liveStatusTextEl.textContent = label;
+        }
+
+        function renderQrCode(url, attempt = 0) {
+          if (typeof window.qrcode !== 'function') {
+            if (attempt < 15) {
+              setTimeout(() => renderQrCode(url, attempt + 1), 250);
+              return;
+            }
+            qrSvgWrapEl.innerHTML =
+              '<span style="font-size:12px;color:#dc2626;">Error cargando librería QR</span>';
+            return;
+          }
+          const qr = window.qrcode(0, 'M');
+          qr.addData(url);
+          qr.make();
+          qrSvgWrapEl.innerHTML = qr.createSvgTag({
+            cellSize: 6,
+            margin: 0,
+            scalable: true,
+          });
+          const svg = qrSvgWrapEl.querySelector('svg');
+          if (svg) {
+            svg.removeAttribute('width');
+            svg.removeAttribute('height');
+          }
+        }
+
+        function getMaterialAdvantage(captured) {
+          const wScore = captured.w.reduce((sum, t) => sum + PIECE_VALUES[t], 0);
+          const bScore = captured.b.reduce((sum, t) => sum + PIECE_VALUES[t], 0);
+          return wScore - bScore;
+        }
+
+        function renderPlayerStrips() {
+          const rivalColor = opposite(myColor);
+          const isMyTurn = gameState.status === 'playing' && gameState.turn === myColor;
+          const isRivalTurn = gameState.status === 'playing' && gameState.turn === rivalColor;
+
+          topSwatchEl.className = 'color-swatch ' + (rivalColor === 'w' ? 'white' : 'black');
+          bottomSwatchEl.className = 'color-swatch ' + (myColor === 'w' ? 'white' : 'black');
+          topNameEl.textContent = rivalColor === 'w' ? 'Blancas' : 'Negras';
+          bottomNameEl.textContent = myColor === 'w' ? 'Blancas' : 'Negras';
+
+          topStripEl.classList.toggle('active-turn', isRivalTurn);
+          bottomStripEl.classList.toggle('active-turn', isMyTurn);
+
+          topTurnTagEl.hidden = !isRivalTurn;
+          bottomTurnTagEl.hidden = !isMyTurn;
+
+          // Piezas capturadas por cada jugador
+          const enemyOfTop = myColor;
+          const enemyOfBottom = rivalColor;
+          topCapturedEl.textContent = gameState.captured[rivalColor]
+            .map((t) => UNICODE_PIECES[enemyOfTop][t])
+            .join('');
+          bottomCapturedEl.textContent = gameState.captured[myColor]
+            .map((t) => UNICODE_PIECES[enemyOfBottom][t])
+            .join('');
+
+          const diff = getMaterialAdvantage(gameState.captured); // >0 favorece Blancas
+          const myAdv = myColor === 'w' ? diff : -diff;
+          const rivalAdv = -myAdv;
+          bottomAdvEl.textContent = myAdv > 0 ? `+${myAdv}` : '';
+          topAdvEl.textContent = rivalAdv > 0 ? `+${rivalAdv}` : '';
+        }
+
+        function renderBoard() {
+          const flipped = myColor === 'b';
+          const whiteCheck = isInCheck(gameState.board, 'w');
+          const blackCheck = isInCheck(gameState.board, 'b');
+
+          boardGridEl.innerHTML = '';
+
+          for (let vr = 0; vr < 8; vr++) {
+            for (let vc = 0; vc < 8; vc++) {
+              const r = flipped ? 7 - vr : vr;
+              const c = flipped ? 7 - vc : vc;
+              const isLight = (r + c) % 2 === 0;
+
+              const sqBtn = document.createElement('button');
+              sqBtn.type = 'button';
+              sqBtn.className = 'square ' + (isLight ? 'light' : 'dark');
+              sqBtn.dataset.r = String(r);
+              sqBtn.dataset.c = String(c);
+              sqBtn.setAttribute('aria-label', squareName(r, c));
+
+              if (gameState.lastMove) {
+                const { from, to } = gameState.lastMove;
+                if (from[0] === r && from[1] === c) sqBtn.classList.add('last-from');
+                if (to[0] === r && to[1] === c) sqBtn.classList.add('last-to');
+              }
+
+              if (selectedSquare && selectedSquare[0] === r && selectedSquare[1] === c) {
+                sqBtn.classList.add('selected');
+              }
+
+              const piece = gameState.board[r][c];
+              if (
+                piece &&
+                piece.type === 'K' &&
+                ((piece.color === 'w' && whiteCheck) || (piece.color === 'b' && blackCheck))
+              ) {
+                sqBtn.classList.add('in-check');
+              }
+
+              // Coordenadas sutiles en bordes izquierdo e inferior visuales
+              if (vc === 0) {
+                const rankLabel = document.createElement('span');
+                rankLabel.className = 'coord-rank';
+                rankLabel.textContent = String(8 - r);
+                sqBtn.appendChild(rankLabel);
+              }
+              if (vr === 7) {
+                const fileLabel = document.createElement('span');
+                fileLabel.className = 'coord-file';
+                fileLabel.textContent = String.fromCharCode(97 + c);
+                sqBtn.appendChild(fileLabel);
+              }
+
+              // Indicador de movimiento legal
+              const legalMove = legalMovesForSelected.find(
+                (m) => m.to[0] === r && m.to[1] === c
+              );
+              if (legalMove) {
+                const indicator = document.createElement('span');
+                indicator.className = legalMove.isCapture ? 'legal-capture' : 'legal-dot';
+                sqBtn.appendChild(indicator);
+              }
+
+              if (piece) {
+                sqBtn.insertAdjacentHTML('beforeend', pieceSvg(piece.color, piece.type));
+              }
+
+              sqBtn.addEventListener('click', () => handleSquareTap(r, c));
+              boardGridEl.appendChild(sqBtn);
+            }
+          }
+        }
+
+        function renderGameStatus() {
+          const turnName = gameState.turn === 'w' ? 'blancas' : 'negras';
+          const inCheckNow =
+            gameState.status === 'playing' && isInCheck(gameState.board, gameState.turn);
+
+          if (gameState.status === 'playing') {
+            if (!isRivalConnected) {
+              gameStatusTextEl.textContent = isHost
+                ? 'Esperando que el rival abra el QR'
+                : 'Conectando partida...';
+            } else if (inCheckNow) {
+              gameStatusTextEl.textContent = `Jaque a las ${turnName}`;
+            } else {
+              gameStatusTextEl.textContent =
+                gameState.turn === myColor ? 'Es tu turno' : `Turno de las ${turnName}`;
+            }
+          } else if (gameState.status === 'checkmate') {
+            const winColor = gameState.winner === 'w' ? 'Blancas' : 'Negras';
+            gameStatusTextEl.textContent = `Jaque mate · Ganan ${winColor}`;
+          } else if (gameState.status === 'resigned') {
+            const winColor = gameState.winner === 'w' ? 'Blancas' : 'Negras';
+            gameStatusTextEl.textContent = `Rendición · Ganan ${winColor}`;
+          } else {
+            gameStatusTextEl.textContent = 'Tablas';
+          }
+
+          moveCounterEl.textContent = `Jugada ${gameState.fullMoveNumber}`;
+
+          // Historial de movimientos
+          if (gameState.history.length === 0) {
+            movesLogEl.innerHTML =
+              '<span class="empty-moves">Las jugadas aparecerán aquí.</span>';
+          } else {
+            let html = '';
+            for (let i = 0; i < gameState.history.length; i += 2) {
+              const num = Math.floor(i / 2) + 1;
+              const wMove = gameState.history[i];
+              const bMove = gameState.history[i + 1] || '';
+              html += `<span class="move-pair"><span class="move-num">${num}.</span><span>${wMove}</span>${
+                bMove ? `<span>${bMove}</span>` : ''
+              }</span>`;
+            }
+            movesLogEl.innerHTML = html;
+            movesLogEl.scrollTop = movesLogEl.scrollHeight;
+          }
+
+          btnResign.disabled = !isRivalConnected || gameState.status !== 'playing';
+          if (gameState.status !== 'playing') {
+            resignConfirmEl.hidden = true;
+          }
+
+          // Modal de fin de partida
+          if (gameState.status !== 'playing' && !overlayDismissed) {
+            gameoverOverlayEl.hidden = false;
+            if (gameState.status === 'checkmate') {
+              const won = gameState.winner === myColor;
+              gameoverTitleEl.textContent = won ? '¡Victoria por jaque mate!' : 'Jaque mate';
+              gameoverSubtitleEl.textContent = won
+                ? 'Has vencido a tu rival.'
+                : 'Tu rival ganó la partida.';
+            } else if (gameState.status === 'resigned') {
+              const won = gameState.winner === myColor;
+              gameoverTitleEl.textContent = won ? 'Victoria por rendición' : 'Te has rendido';
+              gameoverSubtitleEl.textContent = won
+                ? 'Tu rival abandonó la partida.'
+                : 'La partida ha finalizado.';
+            } else if (gameState.status === 'stalemate') {
+              gameoverTitleEl.textContent = 'Tablas por ahogado';
+              gameoverSubtitleEl.textContent = 'No quedan jugadas legales.';
+            } else if (gameState.status === 'draw_insufficient') {
+              gameoverTitleEl.textContent = 'Tablas';
+              gameoverSubtitleEl.textContent = 'Material insuficiente para dar mate.';
+            } else if (gameState.status === 'draw_repetition') {
+              gameoverTitleEl.textContent = 'Tablas';
+              gameoverSubtitleEl.textContent = 'Triple repetición de posición.';
+            } else {
+              gameoverTitleEl.textContent = 'Tablas';
+              gameoverSubtitleEl.textContent = 'Regla de los 50 movimientos.';
+            }
+            btnRematch.disabled = !isRivalConnected;
+          } else {
+            gameoverOverlayEl.hidden = true;
+          }
+        }
+
+        function renderAll() {
+          renderPlayerStrips();
+          renderBoard();
+          renderGameStatus();
+        }
+
+        // ============================================================
+        // 6. INTERACCIÓN EN EL TABLERO
+        // ============================================================
+        function handleSquareTap(r, c) {
+          if (!isRivalConnected) return;
+          if (gameState.status !== 'playing') return;
+          if (gameState.turn !== myColor) return;
+          if (pendingPromotion) return;
+
+          // Verificar si tocó un destino legal
+          const chosenMove = legalMovesForSelected.find(
+            (m) => m.to[0] === r && m.to[1] === c
+          );
+          if (chosenMove) {
+            if (chosenMove.isPromotion) {
+              openPromotionPicker(chosenMove);
+            } else {
+              executeLocalMove(chosenMove);
+            }
+            return;
+          }
+
+          // Verificar si seleccionó una pieza propia
+          const piece = gameState.board[r][c];
+          if (piece && piece.color === myColor) {
+            if (selectedSquare && selectedSquare[0] === r && selectedSquare[1] === c) {
+              selectedSquare = null;
+              legalMovesForSelected = [];
+            } else {
+              selectedSquare = [r, c];
+              legalMovesForSelected = getLegalMovesForSquare(gameState, r, c);
+            }
+            renderBoard();
+            return;
+          }
+
+          // Toque fuera de selección válida
+          if (selectedSquare) {
+            selectedSquare = null;
+            legalMovesForSelected = [];
+            renderBoard();
+          }
+        }
+
+        function openPromotionPicker(move) {
+          pendingPromotion = move;
+          promoGridEl.innerHTML = '';
+          const options = ['Q', 'R', 'B', 'N'];
+          for (const type of options) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'promo-btn';
+            btn.setAttribute('aria-label', type);
+            btn.innerHTML = pieceSvg(myColor, type);
+            btn.addEventListener('click', () => {
+              const finalMove = { ...pendingPromotion, promotion: type };
+              pendingPromotion = null;
+              promoOverlayEl.hidden = true;
+              executeLocalMove(finalMove);
+            });
+            promoGridEl.appendChild(btn);
+          }
+          promoOverlayEl.hidden = false;
+        }
+
+        function executeLocalMove(move) {
+          gameState = applyMove(gameState, move);
+          selectedSquare = null;
+          legalMovesForSelected = [];
+          overlayDismissed = false;
+
+          const soundType = isInCheck(gameState.board, gameState.turn)
+            ? 'check'
+            : move.isCapture
+            ? 'capture'
+            : 'move';
+          playMoveSound(soundType);
+
+          renderAll();
+
+          sendPacket({
+            type: 'MOVE',
+            move: {
+              from: move.from,
+              to: move.to,
+              promotion: move.promotion || null,
+            },
+          });
+        }
+
+        function applyRemoteMove(moveData) {
+          const [fr, fc] = moveData.from;
+          const [tr, tc] = moveData.to;
+          const legal = getLegalMovesForSquare(gameState, fr, fc);
+          const matched = legal.find((m) => m.to[0] === tr && m.to[1] === tc);
+          if (!matched) return;
+
+          const fullMove = { ...matched };
+          if (fullMove.isPromotion && moveData.promotion) {
+            fullMove.promotion = moveData.promotion;
+          }
+
+          gameState = applyMove(gameState, fullMove);
+          selectedSquare = null;
+          legalMovesForSelected = [];
+          overlayDismissed = false;
+
+          const soundType = isInCheck(gameState.board, gameState.turn)
+            ? 'check'
+            : fullMove.isCapture
+            ? 'capture'
+            : 'move';
+          playMoveSound(soundType);
+
+          renderAll();
+        }
+
+        // ============================================================
+        // 7. LÓGICA DE RED PEERJS (SIN BASE DE DATOS)
+        // ============================================================
+        function sendPacket(payload) {
+          if (conn && conn.open) {
+            conn.send(payload);
+          }
+        }
+
+        function bindConnection(connection) {
+          if (conn && conn !== connection) {
+            try {
+              conn.close();
+            } catch (_) {}
+          }
+          conn = connection;
+
+          conn.on('open', () => {
+            isRivalConnected = true;
+            setConnectionIndicator('connected', 'Rival conectado');
+
+            if (isHost) {
+              // Ocultar tarjeta QR automáticamente en celular para priorizar el tablero
+              if (window.innerWidth < 900) {
+                qrVisible = false;
+                qrCardEl.hidden = true;
+              }
+              sendPacket({
+                type: 'SYNC_STATE',
+                state: gameState,
+                hostColor: myColor,
+              });
+            } else {
+              guestCardEl.hidden = true;
+            }
+            renderAll();
+          });
+
+          conn.on('data', (data) => {
+            if (!data || typeof data !== 'object') return;
+
+            if (data.type === 'MOVE' && data.move) {
+              applyRemoteMove(data.move);
+            } else if (data.type === 'SYNC_STATE' && data.state) {
+              gameState = data.state;
+              if (data.hostColor) {
+                myColor = opposite(data.hostColor);
+              }
+              selectedSquare = null;
+              legalMovesForSelected = [];
+              overlayDismissed = false;
+              renderAll();
+            } else if (data.type === 'RESIGN') {
+              if (gameState.status === 'playing') {
+                gameState.status = 'resigned';
+                gameState.winner = myColor;
+                overlayDismissed = false;
+                renderAll();
+              }
+            } else if (data.type === 'REMATCH') {
+              myColor = opposite(myColor);
+              gameState = createInitialState();
+              selectedSquare = null;
+              legalMovesForSelected = [];
+              pendingPromotion = null;
+              promoOverlayEl.hidden = true;
+              overlayDismissed = false;
+              renderAll();
+            }
+          });
+
+          conn.on('close', () => {
+            isRivalConnected = false;
+            if (isHost) {
+              setConnectionIndicator('waiting', 'Esperando rival...');
+              qrVisible = true;
+              qrCardEl.hidden = false;
+            } else {
+              setConnectionIndicator('disconnected', 'Rival desconectado');
+              guestCardEl.hidden = false;
+              guestHeadingEl.textContent = 'Conexión perdida';
+              guestDescEl.textContent =
+                'Se perdió el enlace con el anfitrión. Puedes intentar reconectar.';
+              btnReconnect.hidden = false;
+            }
+            renderAll();
+          });
+
+          conn.on('error', () => {
+            isRivalConnected = false;
+            setConnectionIndicator('disconnected', 'Error de conexión');
+            if (!isHost) {
+              guestCardEl.hidden = false;
+              btnReconnect.hidden = false;
+            }
+            renderAll();
+          });
+        }
+
+        function initPeer(attempt = 0) {
+          if (typeof window.Peer !== 'function') {
+            if (attempt < 15) {
+              setTimeout(() => initPeer(attempt + 1), 250);
+              return;
+            }
+            setConnectionIndicator('disconnected', 'Error al cargar PeerJS');
+            return;
+          }
+
+          if (isHost) {
+            qrCardEl.hidden = false;
+            guestCardEl.hidden = true;
+            btnToggleQr.hidden = false;
+            setConnectionIndicator('waiting', 'Esperando rival...');
+
+            const randomSuffix = Math.random().toString(36).substring(2, 8);
+            const customHostId = `ajedrez-${randomSuffix}`;
+            peer = new window.Peer(customHostId, PEER_CONFIG);
+
+            function updateHostShareUrl(id) {
+              const targetUrl = new URL(window.location.href);
+              targetUrl.search = '';
+              targetUrl.hash = '';
+              if (targetUrl.hostname.startsWith('ais-dev-')) {
+                urlModeSwitchEl.hidden = false;
+                previewAccessNoteEl.hidden = false;
+                if (useSharedPreviewUrl) {
+                  targetUrl.hostname = targetUrl.hostname.replace(/^ais-dev-/, 'ais-pre-');
+                }
+              }
+              targetUrl.searchParams.set('id', id);
+              shareUrl = targetUrl.toString();
+
+              peerIdLabelEl.textContent = `ID de sala: ${id}`;
+              btnCopyLink.disabled = false;
+              if (navigator.share) {
+                btnShareLink.hidden = false;
+              }
+              renderQrCode(shareUrl);
+            }
+
+            btnModeDev.addEventListener('click', () => {
+              useSharedPreviewUrl = false;
+              btnModeDev.classList.add('active');
+              btnModePre.classList.remove('active');
+              if (currentHostPeerId) updateHostShareUrl(currentHostPeerId);
+            });
+
+            btnModePre.addEventListener('click', () => {
+              useSharedPreviewUrl = true;
+              btnModePre.classList.add('active');
+              btnModeDev.classList.remove('active');
+              if (currentHostPeerId) updateHostShareUrl(currentHostPeerId);
+            });
+
+            peer.on('open', (id) => {
+              currentHostPeerId = id;
+              updateHostShareUrl(id);
+            });
+
+            peer.on('connection', (incomingConn) => {
+              bindConnection(incomingConn);
+            });
+
+            peer.on('disconnected', () => {
+              if (!peer.destroyed) {
+                peer.reconnect();
+              }
+            });
+
+            peer.on('error', (err) => {
+              if (err && err.type === 'unavailable-id') {
+                peer.destroy();
+                initPeer();
+                return;
+              }
+              if (!isRivalConnected) {
+                setConnectionIndicator('disconnected', 'Reconectando sala...');
+              }
+            });
+          } else {
+            // Modo invitado (abrió el código QR)
+            qrCardEl.hidden = true;
+            guestCardEl.hidden = false;
+            btnToggleQr.hidden = true;
+            setConnectionIndicator('waiting', 'Esperando rival...');
+            guestHeadingEl.textContent = 'Conectando con anfitrión';
+            guestDescEl.textContent = `Estableciendo conexión directa con la sala ${hostIdFromUrl}...`;
+
+            peer = new window.Peer(undefined, PEER_CONFIG);
+
+            peer.on('open', () => {
+              const outConn = peer.connect(hostIdFromUrl, { reliable: true });
+              bindConnection(outConn);
+            });
+
+            peer.on('error', () => {
+              isRivalConnected = false;
+              setConnectionIndicator('disconnected', 'No se encontró la sala');
+              guestCardEl.hidden = false;
+              guestHeadingEl.textContent = 'No se pudo conectar';
+              guestDescEl.textContent =
+                'Verifica que el anfitrión tenga la pantalla abierta o crea una nueva partida.';
+              btnReconnect.hidden = false;
+            });
+          }
+        }
+
+        // ============================================================
+        // 8. CONTROLES DE USUARIO
+        // ============================================================
+        btnCopyLink.addEventListener('click', async () => {
+          if (!shareUrl) return;
+          try {
+            await navigator.clipboard.writeText(shareUrl);
+            copyFeedbackEl.textContent = 'Enlace copiado al portapapeles';
+          } catch (_) {
+            copyFeedbackEl.textContent = shareUrl;
+          }
+          setTimeout(() => {
+            copyFeedbackEl.textContent = '';
+          }, 2600);
+        });
+
+        btnShareLink.addEventListener('click', async () => {
+          if (!shareUrl || !navigator.share) return;
+          try {
+            await navigator.share({
+              title: 'Partida de Ajedrez P2P',
+              text: 'Únete a mi partida de ajedrez:',
+              url: shareUrl,
+            });
+          } catch (_) {}
+        });
+
+        btnDownloadHtml.addEventListener('click', () => {
+          const clone = document.documentElement.cloneNode(true);
+          const cStatus = clone.querySelector('#live-status');
+          if (cStatus) cStatus.className = 'live-status waiting';
+          const cStatusTxt = clone.querySelector('#live-status-text');
+          if (cStatusTxt) cStatusTxt.textContent = 'Esperando rival...';
+          const cBoard = clone.querySelector('#board-grid');
+          if (cBoard) cBoard.innerHTML = '';
+          const cQr = clone.querySelector('#qr-svg-wrap');
+          if (cQr) cQr.innerHTML = '<span style="font-size:12px;color:#71717a;">Generando QR...</span>';
+          const cPeerLbl = clone.querySelector('#peer-id-label');
+          if (cPeerLbl) cPeerLbl.textContent = 'Preparando sala P2P...';
+          const cCopyBtn = clone.querySelector('#btn-copy-link');
+          if (cCopyBtn) cCopyBtn.setAttribute('disabled', '');
+          const cNote = clone.querySelector('#preview-access-note');
+          if (cNote) cNote.setAttribute('hidden', '');
+          const cSwitch = clone.querySelector('#url-mode-switch');
+          if (cSwitch) cSwitch.setAttribute('hidden', '');
+          const cQrCard = clone.querySelector('#qr-card');
+          if (cQrCard) cQrCard.removeAttribute('hidden');
+          const cGuestCard = clone.querySelector('#guest-card');
+          if (cGuestCard) cGuestCard.setAttribute('hidden', '');
+
+          const htmlContent = '<!doctype html>\n' + clone.outerHTML;
+          const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'ajedrez-p2p.html';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        });
+
+        btnToggleQr.addEventListener('click', () => {
+          qrVisible = !qrVisible;
+          qrCardEl.hidden = !qrVisible;
+        });
+
+        btnResign.addEventListener('click', () => {
+          if (!isRivalConnected || gameState.status !== 'playing') return;
+          resignConfirmEl.hidden = !resignConfirmEl.hidden;
+        });
+
+        btnCancelResign.addEventListener('click', () => {
+          resignConfirmEl.hidden = true;
+        });
+
+        btnConfirmResign.addEventListener('click', () => {
+          resignConfirmEl.hidden = true;
+          if (gameState.status !== 'playing') return;
+          gameState.status = 'resigned';
+          gameState.winner = opposite(myColor);
+          overlayDismissed = false;
+          sendPacket({ type: 'RESIGN' });
+          renderAll();
+        });
+
+        btnRematch.addEventListener('click', () => {
+          if (!isRivalConnected) return;
+          myColor = opposite(myColor);
+          gameState = createInitialState();
+          selectedSquare = null;
+          legalMovesForSelected = [];
+          pendingPromotion = null;
+          promoOverlayEl.hidden = true;
+          overlayDismissed = false;
+          sendPacket({ type: 'REMATCH' });
+          renderAll();
+        });
+
+        btnCloseOverlay.addEventListener('click', () => {
+          overlayDismissed = true;
+          gameoverOverlayEl.hidden = true;
+        });
+
+        btnSound.addEventListener('click', () => {
+          soundEnabled = !soundEnabled;
+          btnSound.textContent = soundEnabled ? 'Sonido: Sí' : 'Sonido: No';
+          btnSound.setAttribute('aria-pressed', String(soundEnabled));
+        });
+
+        btnReconnect.addEventListener('click', () => {
+          if (!hostIdFromUrl || !peer) return;
+          btnReconnect.hidden = true;
+          setConnectionIndicator('waiting', 'Esperando rival...');
+          guestHeadingEl.textContent = 'Reconectando...';
+          guestDescEl.textContent = `Intentando conectar con ${hostIdFromUrl}...`;
+          if (peer.destroyed) {
+            initPeer();
+          } else if (peer.disconnected) {
+            peer.reconnect();
+          } else {
+            const outConn = peer.connect(hostIdFromUrl, { reliable: true });
+            bindConnection(outConn);
+          }
+        });
+
+        btnNewHost.addEventListener('click', () => {
+          const cleanUrl = new URL(window.location.href);
+          cleanUrl.search = '';
+          cleanUrl.hash = '';
+          window.location.href = cleanUrl.toString();
+        });
+
+        // Inicializar tablero y conexión P2P
+        renderAll();
+        initPeer();
+      })();
+    </script>
+  </body>
+</html>
