@@ -468,6 +468,20 @@
         transform: translateY(-2px) scale(1.06);
       }
 
+      .move-guide {
+        font-size: 13px;
+        line-height: 1.4;
+        color: var(--text-secondary);
+        text-align: center;
+        padding: 2px 4px;
+        min-height: 20px;
+      }
+
+      .move-guide.alert {
+        color: var(--status-waiting);
+        font-weight: 600;
+      }
+
       /* Overlays dentro del tablero (Promoción / Fin de partida) */
       .board-overlay {
         position: absolute;
@@ -905,6 +919,9 @@
           </div>
 
           <!-- Controles rápidos en zona de pulgar -->
+          <div id="move-guide" class="move-guide" aria-live="polite">
+            Toca una ficha blanca y luego toca un punto para mover.
+          </div>
           <div class="actions-bar">
             <button id="btn-toggle-qr" type="button" class="action-btn">
               Código QR
@@ -1697,6 +1714,8 @@
         let legalMovesForSelected = [];
         let pendingPromotion = null; // { from, to, ... }
         let overlayDismissed = false;
+        let hasStartedP2PGame = false;
+        let guideTimeout = null;
 
         let peer = null;
         let conn = null;
@@ -1772,6 +1791,7 @@
         const gameStatusTextEl = document.getElementById('game-status-text');
         const moveCounterEl = document.getElementById('move-counter');
         const movesLogEl = document.getElementById('moves-log');
+        const moveGuideEl = document.getElementById('move-guide');
 
         // ============================================================
         // 5. RENDERIZADO DE UI Y TABLERO
@@ -1825,6 +1845,8 @@
           topStripEl.classList.toggle('active-turn', isRivalTurn);
           bottomStripEl.classList.toggle('active-turn', isMyTurn);
 
+          topTurnTagEl.textContent = isRivalConnected ? 'Su turno' : 'Turno (local)';
+          bottomTurnTagEl.textContent = isRivalConnected ? 'Tu turno' : 'Turno (local)';
           topTurnTagEl.hidden = !isRivalTurn;
           bottomTurnTagEl.hidden = !isMyTurn;
 
@@ -1926,7 +1948,7 @@
           if (gameState.status === 'playing') {
             if (!isRivalConnected) {
               gameStatusTextEl.textContent = isHost
-                ? 'Esperando que el rival abra el QR'
+                ? `Prueba local (${turnName}) · Esperando rival`
                 : 'Conectando partida...';
             } else if (inCheckNow) {
               gameStatusTextEl.textContent = `Jaque a las ${turnName}`;
@@ -1997,9 +2019,41 @@
               gameoverTitleEl.textContent = 'Tablas';
               gameoverSubtitleEl.textContent = 'Regla de los 50 movimientos.';
             }
-            btnRematch.disabled = !isRivalConnected;
+            btnRematch.disabled = false;
           } else {
             gameoverOverlayEl.hidden = true;
+          }
+        }
+
+        function updateMoveGuide(tempMsg, isAlert) {
+          if (guideTimeout) {
+            clearTimeout(guideTimeout);
+            guideTimeout = null;
+          }
+          if (tempMsg) {
+            moveGuideEl.textContent = tempMsg;
+            moveGuideEl.classList.toggle('alert', !!isAlert);
+            guideTimeout = setTimeout(() => updateMoveGuide(), 2200);
+            return;
+          }
+          moveGuideEl.classList.remove('alert');
+          if (gameState.status !== 'playing') {
+            moveGuideEl.textContent = 'Partida finalizada.';
+          } else if (!isRivalConnected && !isHost) {
+            moveGuideEl.textContent = 'Esperando conexión con el anfitrión...';
+          } else if (isRivalConnected && gameState.turn !== myColor) {
+            const turnLabel = gameState.turn === 'w' ? 'blancas' : 'negras';
+            moveGuideEl.textContent = `Turno del rival (${turnLabel}). Espera su jugada.`;
+          } else if (selectedSquare) {
+            moveGuideEl.textContent =
+              legalMovesForSelected.length > 0
+                ? 'Toca uno de los puntos marcados para mover ahí.'
+                : 'Esa ficha no tiene movimientos legales. Elige otra.';
+          } else {
+            const turnLabel = gameState.turn === 'w' ? 'blancas' : 'negras';
+            moveGuideEl.textContent = isRivalConnected
+              ? `Tu turno (${turnLabel}): toca una ficha para ver sus jugadas.`
+              : `Modo local (${turnLabel}): toca una ficha y luego su destino.`;
           }
         }
 
@@ -2007,16 +2061,28 @@
           renderPlayerStrips();
           renderBoard();
           renderGameStatus();
+          updateMoveGuide();
         }
 
         // ============================================================
         // 6. INTERACCIÓN EN EL TABLERO
         // ============================================================
         function handleSquareTap(r, c) {
-          if (!isRivalConnected) return;
           if (gameState.status !== 'playing') return;
-          if (gameState.turn !== myColor) return;
           if (pendingPromotion) return;
+
+          if (!isRivalConnected && !isHost) {
+            updateMoveGuide('Esperando conexión con el anfitrión...', true);
+            return;
+          }
+
+          const controllableColor = isRivalConnected ? myColor : gameState.turn;
+
+          if (isRivalConnected && gameState.turn !== myColor) {
+            const turnLabel = gameState.turn === 'w' ? 'blancas' : 'negras';
+            updateMoveGuide(`Es turno del rival (${turnLabel}).`, true);
+            return;
+          }
 
           // Verificar si tocó un destino legal
           const chosenMove = legalMovesForSelected.find(
@@ -2031,9 +2097,9 @@
             return;
           }
 
-          // Verificar si seleccionó una pieza propia
+          // Verificar si seleccionó una pieza del turno activo
           const piece = gameState.board[r][c];
-          if (piece && piece.color === myColor) {
+          if (piece && piece.color === controllableColor) {
             if (selectedSquare && selectedSquare[0] === r && selectedSquare[1] === c) {
               selectedSquare = null;
               legalMovesForSelected = [];
@@ -2042,7 +2108,13 @@
               legalMovesForSelected = getLegalMovesForSquare(gameState, r, c);
             }
             renderBoard();
+            updateMoveGuide();
             return;
+          }
+
+          if (piece && piece.color !== controllableColor) {
+            const activeLabel = controllableColor === 'w' ? 'blancas' : 'negras';
+            updateMoveGuide(`Ahora mueven las ${activeLabel}. Toca una ficha ${activeLabel}.`, true);
           }
 
           // Toque fuera de selección válida
@@ -2050,11 +2122,13 @@
             selectedSquare = null;
             legalMovesForSelected = [];
             renderBoard();
+            updateMoveGuide();
           }
         }
 
         function openPromotionPicker(move) {
           pendingPromotion = move;
+          const movingColor = gameState.turn;
           promoGridEl.innerHTML = '';
           const options = ['Q', 'R', 'B', 'N'];
           for (const type of options) {
@@ -2062,7 +2136,7 @@
             btn.type = 'button';
             btn.className = 'promo-btn';
             btn.setAttribute('aria-label', type);
-            btn.innerHTML = pieceSvg(myColor, type);
+            btn.innerHTML = pieceSvg(movingColor, type);
             btn.addEventListener('click', () => {
               const finalMove = { ...pendingPromotion, promotion: type };
               pendingPromotion = null;
@@ -2148,6 +2222,17 @@
             setConnectionIndicator('connected', 'Rival conectado');
 
             if (isHost) {
+              if (!hasStartedP2PGame) {
+                hasStartedP2PGame = true;
+                if (gameState.history.length > 0) {
+                  gameState = createInitialState();
+                  selectedSquare = null;
+                  legalMovesForSelected = [];
+                  pendingPromotion = null;
+                  promoOverlayEl.hidden = true;
+                  overlayDismissed = false;
+                }
+              }
               // Ocultar tarjeta QR automáticamente en celular para priorizar el tablero
               if (window.innerWidth < 900) {
                 qrVisible = false;
@@ -2159,6 +2244,7 @@
                 hostColor: myColor,
               });
             } else {
+              hasStartedP2PGame = true;
               guestCardEl.hidden = true;
             }
             renderAll();
@@ -2421,15 +2507,16 @@
         });
 
         btnRematch.addEventListener('click', () => {
-          if (!isRivalConnected) return;
-          myColor = opposite(myColor);
+          if (isRivalConnected) {
+            myColor = opposite(myColor);
+            sendPacket({ type: 'REMATCH' });
+          }
           gameState = createInitialState();
           selectedSquare = null;
           legalMovesForSelected = [];
           pendingPromotion = null;
           promoOverlayEl.hidden = true;
           overlayDismissed = false;
-          sendPacket({ type: 'REMATCH' });
           renderAll();
         });
 
